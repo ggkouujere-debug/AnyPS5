@@ -1,6 +1,7 @@
 #include <cstdint>
 #include "SceTypes.hpp"
 #include "prx/libc/include/General.hpp"
+#include "AudioOut2Internal.hpp"
 
 extern "C" {
 
@@ -24,7 +25,7 @@ int APS5_VABI sceAudioOut2MasteringGetState(AudioOut2MasteringStatesHeader* stat
 int APS5_VABI sceAudioOut2MasteringSetParam(const AudioOut2MasteringParamsHeader* param, uint32_t output, uint32_t flags) {
     (void)output;
     (void)flags;
-    if (param == nullptr) NotImplemented_nid_no_patch(__func__);
+    if (param == nullptr) return SCE_AUDIO_OUT2_ERROR_INVALID_ARGUMENT;
     return 0;
 }
 
