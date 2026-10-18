@@ -73,6 +73,21 @@ void APS5_VABI Other(void*, const ImeEvent*) {
     std::abort();
 }
 
+std::int32_t UppercaseFilter(char16_t* out_text, std::uint32_t* out_text_length, const char16_t* source_text,
+                              std::uint32_t source_text_length) {
+    for (std::uint32_t i = 0; i < source_text_length; ++i) {
+        const char16_t unit = source_text[i];
+        out_text[i] = unit >= u'a' && unit <= u'z' ? static_cast<char16_t>(unit - (u'a' - u'A')) : unit;
+    }
+    *out_text_length = source_text_length;
+    return 0;
+}
+
+std::int32_t RejectFilter(char16_t*, std::uint32_t* out_text_length, const char16_t*, std::uint32_t) {
+    *out_text_length = 0;
+    return 1;
+}
+
 void Require(bool value, const char* message) {
     if (value) return;
     std::fprintf(stderr, "%s\n", message);
@@ -174,15 +189,10 @@ void CheckValidation() {
     Require(sceImeClose_nid_postfix() == 0, "close after over-2K open");
 
     param = MakeParam(buffers, 16);
-    param.filter = reinterpret_cast<ImeTextFilter>(&Record);
-    bool threw = false;
-    try {
-        sceImeOpen_nid_postfix(&param, nullptr);
-    } catch (const std::exception&) {
-        threw = true;
-    }
-    Require(threw, "text filter must throw");
-    Require(!ImeCapturesKeyboard_nid_postfix(), "failed open left a session");
+    param.filter = &UppercaseFilter;
+    Require(sceImeOpen_nid_postfix(&param, nullptr) == 0, "text filter open");
+    Require(sceImeClose_nid_postfix() == 0, "text filter close");
+    Require(!ImeCapturesKeyboard_nid_postfix(), "keyboard captured after filter close");
 }
 
 void CheckEditing() {
@@ -304,8 +314,31 @@ void CheckMultiline() {
     Require(sceImeClose_nid_postfix() == 0, "multiline close");
 }
 
-void CheckHostEvents() {
-    Buffers buffers;
+void CheckTextFilter() {
+    Buffers acceptBuffers;
+    Param acceptParam = MakeParam(acceptBuffers, 16);
+    acceptParam.filter = &UppercaseFilter;
+    Require(sceImeOpen_nid_postfix(&acceptParam, nullptr) == 0, "filter open");
+    Drain();
+    Publish(ImeHostInputKind::Text, "ab");
+    auto events = Drain();
+    Require(events.size() == 1, "filtered text event count");
+    RequireText(events[0], EventUpdateText, u"AB", 2, 0, 2);
+    Require(std::u16string(acceptBuffers.text) == u"AB", "filtered buffer");
+    Require(sceImeClose_nid_postfix() == 0, "filter close");
+
+    Buffers rejectBuffers;
+    Param rejectParam = MakeParam(rejectBuffers, 16);
+    rejectParam.filter = &RejectFilter;
+    Require(sceImeOpen_nid_postfix(&rejectParam, nullptr) == 0, "rejecting filter open");
+    Drain();
+    Publish(ImeHostInputKind::Text, "ab");
+    Require(Drain().empty(), "rejected text queued no event");
+    Require(std::u16string(rejectBuffers.text).empty(), "rejected text left the buffer empty");
+    Require(sceImeClose_nid_postfix() == 0, "rejecting filter close");
+}
+
+void CheckHostEvents() {    Buffers buffers;
     Param param = MakeParam(buffers, 16);
     Require(sceImeOpen_nid_postfix(&param, nullptr) == 0, "host events open");
     Drain();
@@ -346,5 +379,6 @@ int main() {
     CheckValidation();
     CheckEditing();
     CheckMultiline();
+    CheckTextFilter();
     CheckHostEvents();
 }

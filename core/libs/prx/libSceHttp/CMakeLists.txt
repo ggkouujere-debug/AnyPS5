@@ -17,4 +17,13 @@ if(BUILD_TESTING)
         set_tests_properties(guest_http guest_http_response_header PROPERTIES ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:libSceHttp>")
     endif()
+    add_test_executable(http_set_cookie_enabled_tests ${CMAKE_CURRENT_SOURCE_DIR}/tests/HttpSetCookieEnabled.cpp)
+    target_include_directories(http_set_cookie_enabled_tests PRIVATE ${LIBS_INCLUDE_DIR})
+    target_link_libraries(http_set_cookie_enabled_tests PRIVATE libSceHttp libc)
+    configure_windows_unwind(http_set_cookie_enabled_tests)
+    add_test(NAME http_set_cookie_enabled COMMAND http_set_cookie_enabled_tests)
+    if(WIN32)
+        set_tests_properties(http_set_cookie_enabled PROPERTIES ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:libSceHttp>")
+    endif()
 endif()

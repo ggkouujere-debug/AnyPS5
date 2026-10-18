@@ -12,4 +12,13 @@ if(BUILD_TESTING)
         set_tests_properties(guest_json PROPERTIES ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:libSceJson2>")
     endif()
+    add_test_executable(json_handlers_tests ${CMAKE_CURRENT_SOURCE_DIR}/tests/JsonHandlers.cpp)
+    target_include_directories(json_handlers_tests PRIVATE ${LIBS_INCLUDE_DIR})
+    target_link_libraries(json_handlers_tests PRIVATE libSceJson2 libc)
+    configure_windows_unwind(json_handlers_tests)
+    add_test(NAME json_handlers COMMAND json_handlers_tests)
+    if(WIN32)
+        set_tests_properties(json_handlers PROPERTIES ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:libSceJson2>")
+    endif()
 endif()
