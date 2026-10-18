@@ -156,6 +156,12 @@ void QueueCaretSteps(Session& session, uint32_t direction, std::size_t steps) {
 }
 
 void Insert(Session& session, std::u16string units) {
+    if (session.param.filter) {
+        std::u16string filtered(session.param.max_text_length, u'\0');
+        std::uint32_t filteredLength = static_cast<std::uint32_t>(filtered.size());
+        if (session.param.filter(filtered.data(), &filteredLength, units.data(), static_cast<std::uint32_t>(units.size())) != 0) return;
+        units.assign(filtered.data(), filteredLength);
+    }
     const bool multiline = (session.param.option & OptionMultiline) != 0;
     std::u16string accepted;
     for (const char16_t unit : units) {
@@ -297,7 +303,6 @@ int APS5_VABI sceImeOpen_nid_postfix(const Param* param, const ExtendedParam* ex
     std::lock_guard lock(g_imeMutex);
     if (g_session) return ErrorBusy;
     if (const int error = ValidateOpen(param, extended)) return error;
-    if (param->filter) NotImplemented_nid_no_patch("sceImeOpen: text filter");
     if (extended && extended->ext_keyboard_filter) NotImplemented_nid_no_patch("sceImeOpen: external keyboard filter");
     Session session;
     session.param = *param;
