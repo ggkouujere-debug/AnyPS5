@@ -5,6 +5,7 @@
 #include <windows.h>
 #include <shellapi.h>
 #include <tlhelp32.h>
+#include <cstdio>
 #else
 #include <sched.h>
 #include <unistd.h>
@@ -664,8 +665,18 @@ int APS5_VABI setpriority_nid_postfix(int which, int who, int niceval) {
 }
 
 int APS5_VABI getdtablesize_nid_postfix(void) {
-    NotImplemented_nid_no_patch(__func__);
-    return -1;
+#ifdef _WIN32
+    const int limit = _getmaxstdio();
+#else
+    rlimit limitValue{};
+    if (getrlimit(RLIMIT_NOFILE, &limitValue) != 0)
+        throw std::system_error(errno, std::generic_category(), "getdtablesize: getrlimit failed");
+    if (limitValue.rlim_cur > static_cast<rlim_t>(std::numeric_limits<int>::max()))
+        throw std::runtime_error("getdtablesize: descriptor table size is outside the guest range");
+    const int limit = static_cast<int>(limitValue.rlim_cur);
+#endif
+    if (limit <= 0) throw std::runtime_error("getdtablesize: descriptor table size is not positive");
+    return limit;
 }
 
 int APS5_VABI sceKernelIsTrinityMode(void) {
