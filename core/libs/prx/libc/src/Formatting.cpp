@@ -6,6 +6,8 @@
 #include <cctype>
 #include <cstring>
 #include <string>
+#include <vector>
+#include <climits>
 #include <cerrno>
 #include <cstdlib>
 #include <memory>
@@ -43,14 +45,14 @@ bool HasGuestWideFormat(const char* format) {
     return false;
 }
 
-void RejectGuestWideScan(const char* format) {
-    if (format == nullptr) return;
+bool HasWideScanFormat(const char* format) {
+    if (format == nullptr) return false;
     while ((format = std::strchr(format, '%')) != nullptr) {
         ++format;
         if (*format == '%') { ++format; continue; }
         while (*format && std::strchr("-+ #0'0123456789.*$", *format)) ++format;
         if (*format == 'S' || *format == 'C' || (*format == 'l' && format[1] != '\0' && std::strchr("sc[", format[1])))
-            NotImplemented_nid_no_patch("scanf 16-bit wide conversion on Linux");
+            return true;
         if (*format == '[') {
             ++format;
             if (*format == '^') ++format;
@@ -58,6 +60,75 @@ void RejectGuestWideScan(const char* format) {
             while (*format && *format != ']') ++format;
         }
         if (*format) ++format;
+    }
+    return false;
+}
+
+bool DecodeUtf8(const char*& p, char32_t& code) {
+    const unsigned char c = static_cast<unsigned char>(*p);
+    if (c < 0x80) {
+        if (c == 0) return false;
+        code = c;
+        ++p;
+        return true;
+    }
+    unsigned length;
+    char32_t value;
+    if ((c & 0xe0) == 0xc0) { length = 2; value = c & 0x1f; }
+    else if ((c & 0xf0) == 0xe0) { length = 3; value = c & 0x0f; }
+    else if ((c & 0xf8) == 0xf0) { length = 4; value = c & 0x07; }
+    else return false;
+    for (unsigned i = 1; i < length; ++i) {
+        const unsigned char d = static_cast<unsigned char>(p[i]);
+        if (d == 0 || (d & 0xc0) != 0x80) return false;
+        value = (value << 6) | (d & 0x3f);
+    }
+    if ((length == 2 && value < 0x80) || (length == 3 && value < 0x800) ||
+        (length == 4 && value < 0x10000) || value > 0x10ffff ||
+        (value >= 0xd800 && value <= 0xdfff)) return false;
+    code = value;
+    p += length;
+    return true;
+}
+
+unsigned EncodeUtf16(char32_t code, char16_t* out) {
+    if (code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)) code = 0xfffd;
+    if (code < 0x10000) {
+        out[0] = static_cast<char16_t>(code);
+        return 1;
+    }
+    code -= 0x10000;
+    out[0] = static_cast<char16_t>(0xd800 + (code >> 10));
+    out[1] = static_cast<char16_t>(0xdc00 + (code & 0x3ff));
+    return 2;
+}
+
+void ParseWideScanset(const std::string& specifier, std::vector<char32_t>& set, bool& negated) {
+    set.clear();
+    negated = false;
+    const char* sp = specifier.c_str();
+    if (*sp != '[') return;
+    ++sp;
+    if (*sp == '^') { negated = true; ++sp; }
+    if (*sp == ']') {
+        set.push_back(static_cast<char32_t>(']'));
+        ++sp;
+    }
+    while (*sp != ']' && *sp != '\0') {
+        const char* q = sp;
+        char32_t first;
+        if (!DecodeUtf8(q, first)) break;
+        if (*q == '-' && q[1] != ']' && q[1] != '\0') {
+            const char* r = q + 1;
+            char32_t last;
+            if (DecodeUtf8(r, last) && first <= last) {
+                for (char32_t c = first; c <= last; ++c) set.push_back(c);
+                sp = r;
+                continue;
+            }
+        }
+        set.push_back(first);
+        sp = q;
     }
 }
 #endif
@@ -154,6 +225,100 @@ int ScanGuest(const char* buffer, const char* format, bool secure, NextPointer n
             }
             continue;
         }
+#ifndef _WIN32
+        const bool wide = conversion == 'S' || conversion == 'C' ||
+            (length == "l" && (conversion == 's' || conversion == 'c' || conversion == '['));
+        if (wide) {
+            const char kind = conversion == 'S' ? 's' : (conversion == 'C' ? 'c' : conversion);
+            char16_t* dest = nullptr;
+            unsigned long unitBudget = ULONG_MAX;
+            unsigned long pointBudget = width;
+            if (kind == 'c' && pointBudget == 0) pointBudget = 1;
+            if (!suppress) {
+                void* raw = nextPointer();
+                if (raw == nullptr) return finish(EOF);
+                dest = static_cast<char16_t*>(raw);
+                if (secure) {
+                    const unsigned long capacity = static_cast<unsigned long>(nextCapacity());
+                    if (capacity == 0) return finish(assigned);
+                    if (kind == 'c') {
+                        if (pointBudget > capacity) {
+                            dest[0] = u'\0';
+                            return finish(assigned);
+                        }
+                        unitBudget = capacity;
+                    } else {
+                        unitBudget = capacity - 1;
+                    }
+                }
+            }
+            std::vector<char32_t> points;
+            const char* p = input;
+            bool atEnd = false;
+            if (kind == 's') {
+                while (std::isspace(static_cast<unsigned char>(*p))) ++p;
+                if (*p == '\0') atEnd = true;
+                else {
+                    unsigned used = 0;
+                    while (*p != '\0' && !std::isspace(static_cast<unsigned char>(*p))) {
+                        if (pointBudget != 0 && points.size() >= pointBudget) break;
+                        const char* q = p;
+                        char32_t code;
+                        if (!DecodeUtf8(q, code)) break;
+                        const unsigned units = code < 0x10000 ? 1u : 2u;
+                        if (used + units > unitBudget) break;
+                        points.push_back(code);
+                        used += units;
+                        p = q;
+                    }
+                }
+            } else if (kind == 'c') {
+                unsigned used = 0;
+                for (unsigned long i = 0; i < pointBudget; ++i) {
+                    if (*p == '\0') { atEnd = true; break; }
+                    const char* q = p;
+                    char32_t code;
+                    if (!DecodeUtf8(q, code)) break;
+                    const unsigned units = code < 0x10000 ? 1u : 2u;
+                    if (used + units > unitBudget) break;
+                    points.push_back(code);
+                    used += units;
+                    p = q;
+                }
+                if (points.empty()) return finish(!converted && atEnd ? EOF : assigned);
+            } else {
+                std::vector<char32_t> set;
+                bool negated = false;
+                ParseWideScanset(specifier, set, negated);
+                unsigned used = 0;
+                while (*p != '\0') {
+                    if (pointBudget != 0 && points.size() >= pointBudget) break;
+                    const char* q = p;
+                    char32_t code;
+                    if (!DecodeUtf8(q, code)) break;
+                    bool inSet = false;
+                    for (char32_t s : set) if (s == code) { inSet = true; break; }
+                    if (inSet == negated) break;
+                    const unsigned units = code < 0x10000 ? 1u : 2u;
+                    if (used + units > unitBudget) break;
+                    points.push_back(code);
+                    used += units;
+                    p = q;
+                }
+                if (points.empty()) return finish(!converted && *p == '\0' ? EOF : assigned);
+            }
+            if (points.empty()) return finish(!converted && atEnd ? EOF : assigned);
+            if (!suppress) {
+                char16_t* d = dest;
+                for (char32_t code : points) d += EncodeUtf16(code, d);
+                if (kind != 'c') *d = u'\0';
+            }
+            input = p;
+            converted = true;
+            if (!suppress) ++assigned;
+            continue;
+        }
+#endif
         if (conversion != 'c' && conversion != '[') {
             const char* probe = input;
             while (std::isspace(static_cast<unsigned char>(*probe))) ++probe;
@@ -206,6 +371,262 @@ int ScanGuest(const char* buffer, const char* format, bool secure, NextPointer n
     }
     return finish(assigned);
 }
+
+#ifndef _WIN32
+struct FileScanInput {
+    std::FILE* stream;
+    std::string pushback;
+    long consumed = 0;
+
+    int get() {
+        if (!pushback.empty()) {
+            int c = static_cast<unsigned char>(pushback.back());
+            pushback.pop_back();
+            return c;
+        }
+        int c = std::fgetc(stream);
+        if (c != EOF) ++consumed;
+        return c;
+    }
+    void unget(int c) {
+        if (c == EOF) return;
+        pushback.push_back(static_cast<char>(c));
+        --consumed;
+    }
+    void flush() {
+        while (!pushback.empty()) {
+            int c = static_cast<unsigned char>(pushback.back());
+            pushback.pop_back();
+            std::ungetc(c, stream);
+        }
+    }
+};
+
+bool DecodeUtf8Stream(FileScanInput& in, char32_t& code) {
+    int b0 = in.get();
+    if (b0 == EOF) return false;
+    const unsigned char c = static_cast<unsigned char>(b0);
+    if (c < 0x80) { code = c; return true; }
+    unsigned length;
+    char32_t value;
+    if ((c & 0xe0) == 0xc0) { length = 2; value = c & 0x1f; }
+    else if ((c & 0xf0) == 0xe0) { length = 3; value = c & 0x0f; }
+    else if ((c & 0xf8) == 0xf0) { length = 4; value = c & 0x07; }
+    else { in.unget(b0); return false; }
+    unsigned char bytes[4];
+    bytes[0] = c;
+    for (unsigned i = 1; i < length; ++i) {
+        int bi = in.get();
+        if (bi == EOF) {
+            for (unsigned j = i; j > 0; --j) in.unget(bytes[j - 1]);
+            return false;
+        }
+        bytes[i] = static_cast<unsigned char>(bi);
+        const unsigned char d = static_cast<unsigned char>(bi);
+        if ((d & 0xc0) != 0x80) {
+            for (unsigned j = i + 1; j > 0; --j) in.unget(bytes[j - 1]);
+            return false;
+        }
+        value = (value << 6) | (d & 0x3f);
+    }
+    if ((length == 2 && value < 0x80) || (length == 3 && value < 0x800) ||
+        (length == 4 && value < 0x10000) || value > 0x10ffff ||
+        (value >= 0xd800 && value <= 0xdfff)) {
+        for (unsigned j = length; j > 0; --j) in.unget(bytes[j - 1]);
+        return false;
+    }
+    code = value;
+    return true;
+}
+
+template <typename NextPointer>
+int ScanFileGuest(std::FILE* stream, const char* format, NextPointer nextPointer) {
+    if (stream == nullptr || format == nullptr) return EOF;
+    FileScanInput in{stream, {}, 0};
+    int assigned = 0;
+    bool converted = false;
+    const char* cursor = format;
+    const auto finish = [&](int result) {
+        in.flush();
+        return result;
+    };
+    while (*cursor != '\0') {
+        if (std::isspace(static_cast<unsigned char>(*cursor))) {
+            while (std::isspace(static_cast<unsigned char>(*cursor))) ++cursor;
+            int c;
+            do { c = in.get(); } while (c != EOF && std::isspace(static_cast<unsigned char>(c)));
+            if (c != EOF) in.unget(c);
+            continue;
+        }
+        if (*cursor != '%' || cursor[1] == '%') {
+            const char expected = *cursor == '%' ? '%' : *cursor;
+            cursor += *cursor == '%' ? 2 : 1;
+            int c;
+            if (expected == '%') {
+                do { c = in.get(); } while (c != EOF && std::isspace(static_cast<unsigned char>(c)));
+                if (c != EOF) in.unget(c);
+            }
+            c = in.get();
+            if (c == EOF) return finish(!converted ? EOF : assigned);
+            if (c != static_cast<unsigned char>(expected)) {
+                in.unget(c);
+                return finish(!converted ? EOF : assigned);
+            }
+            continue;
+        }
+        ++cursor;
+        const bool suppress = *cursor == '*';
+        if (suppress) ++cursor;
+        unsigned long width = 0;
+        while (std::isdigit(static_cast<unsigned char>(*cursor))) width = width * 10 + static_cast<unsigned long>(*cursor++ - '0');
+        const char* lengthStart = cursor;
+        while (std::strchr("hljztL", *cursor) != nullptr && *cursor != '\0') ++cursor;
+        const std::string length(lengthStart, cursor);
+        const char conversion = *cursor;
+        if (conversion == '\0') return finish(assigned);
+        std::string specifier(1, conversion);
+        if (conversion == '[') {
+            const char* setStart = cursor++;
+            if (*cursor == '^') ++cursor;
+            if (*cursor == ']') ++cursor;
+            while (*cursor != '\0' && *cursor != ']') ++cursor;
+            if (*cursor != ']') return finish(assigned);
+            specifier.assign(setStart, cursor + 1);
+        }
+        ++cursor;
+        if (conversion == 'n') {
+            if (!suppress) {
+                void* target = nextPointer();
+                if (target == nullptr) return finish(EOF);
+                const long count = in.consumed;
+                if (length == "hh") *static_cast<signed char*>(target) = static_cast<signed char>(count);
+                else if (length == "h") *static_cast<short*>(target) = static_cast<short>(count);
+                else if (length.empty()) *static_cast<int*>(target) = static_cast<int>(count);
+                else if (length == "l" || length == "ll" || length == "j" || length == "z" || length == "t") {
+                    const std::int64_t value = count;
+                    std::memcpy(target, &value, sizeof(value));
+                } else throw std::invalid_argument("Invalid scan count length");
+            }
+            continue;
+        }
+        const bool wide = conversion == 'S' || conversion == 'C' ||
+            (length == "l" && (conversion == 's' || conversion == 'c' || conversion == '['));
+        if (wide) {
+            const char kind = conversion == 'S' ? 's' : (conversion == 'C' ? 'c' : conversion);
+            char16_t* dest = nullptr;
+            unsigned long pointBudget = width;
+            if (kind == 'c' && pointBudget == 0) pointBudget = 1;
+            if (!suppress) {
+                void* raw = nextPointer();
+                if (raw == nullptr) return finish(EOF);
+                dest = static_cast<char16_t*>(raw);
+            }
+            std::vector<char32_t> points;
+            bool atEnd = false;
+            if (kind == 's') {
+                int c;
+                do { c = in.get(); } while (c != EOF && std::isspace(static_cast<unsigned char>(c)));
+                if (c == EOF) atEnd = true;
+                else {
+                    in.unget(c);
+                    while (true) {
+                        if (pointBudget != 0 && points.size() >= pointBudget) break;
+                        int b = in.get();
+                        if (b == EOF) { atEnd = true; break; }
+                        if (std::isspace(static_cast<unsigned char>(b))) { in.unget(b); break; }
+                        in.unget(b);
+                        char32_t code;
+                        if (!DecodeUtf8Stream(in, code)) break;
+                        points.push_back(code);
+                    }
+                }
+            } else if (kind == 'c') {
+                for (unsigned long i = 0; i < pointBudget; ++i) {
+                    char32_t code;
+                    if (!DecodeUtf8Stream(in, code)) { atEnd = true; break; }
+                    points.push_back(code);
+                }
+                if (points.empty()) return finish(!converted && atEnd ? EOF : assigned);
+            } else {
+                std::vector<char32_t> set;
+                bool negated = false;
+                ParseWideScanset(specifier, set, negated);
+                while (true) {
+                    if (pointBudget != 0 && points.size() >= pointBudget) break;
+                    char32_t code;
+                    if (!DecodeUtf8Stream(in, code)) { atEnd = true; break; }
+                    bool inSet = false;
+                    for (char32_t s : set) if (s == code) { inSet = true; break; }
+                    if (inSet == negated) {
+                        // Push back the bytes of this code point. Re-encode to UTF-8.
+                        char tmp[4];
+                        unsigned len = 0;
+                        if (code < 0x80) { tmp[0] = static_cast<char>(code); len = 1; }
+                        else if (code < 0x800) {
+                            tmp[0] = static_cast<char>(0xc0 | (code >> 6));
+                            tmp[1] = static_cast<char>(0x80 | (code & 0x3f));
+                            len = 2;
+                        } else if (code < 0x10000) {
+                            tmp[0] = static_cast<char>(0xe0 | (code >> 12));
+                            tmp[1] = static_cast<char>(0x80 | ((code >> 6) & 0x3f));
+                            tmp[2] = static_cast<char>(0x80 | (code & 0x3f));
+                            len = 3;
+                        } else {
+                            tmp[0] = static_cast<char>(0xf0 | (code >> 18));
+                            tmp[1] = static_cast<char>(0x80 | ((code >> 12) & 0x3f));
+                            tmp[2] = static_cast<char>(0x80 | ((code >> 6) & 0x3f));
+                            tmp[3] = static_cast<char>(0x80 | (code & 0x3f));
+                            len = 4;
+                        }
+                        for (unsigned j = len; j > 0; --j) in.unget(static_cast<unsigned char>(tmp[j - 1]));
+                        break;
+                    }
+                    points.push_back(code);
+                }
+                if (points.empty()) return finish(!converted && atEnd ? EOF : assigned);
+            }
+            if (points.empty()) return finish(!converted && atEnd ? EOF : assigned);
+            if (!suppress) {
+                char16_t* d = dest;
+                for (char32_t code : points) d += EncodeUtf16(code, d);
+                if (kind != 'c') *d = u'\0';
+            }
+            converted = true;
+            if (!suppress) ++assigned;
+            continue;
+        }
+        if (conversion != 'c' && conversion != '[') {
+            int c;
+            do { c = in.get(); } while (c != EOF && std::isspace(static_cast<unsigned char>(c)));
+            if (c == EOF) return finish(converted ? assigned : EOF);
+            in.unget(c);
+        }
+        in.flush();
+        std::string directive = "%";
+        void* target = nullptr;
+        if (suppress) directive += '*';
+        else {
+            target = nextPointer();
+            if (target == nullptr) return finish(EOF);
+        }
+        if (width != 0) directive += std::to_string(width);
+        directive += HostLength(length, conversion);
+        directive += specifier;
+        directive += "%n";
+        int hconsumed = -1;
+        const int matched = suppress ?
+            std::fscanf(stream, directive.c_str(), &hconsumed) :
+            std::fscanf(stream, directive.c_str(), target, &hconsumed);
+        if (hconsumed < 0 || (!suppress && matched != 1)) {
+            return finish(matched == EOF && !converted ? EOF : assigned);
+        }
+        in.consumed += hconsumed;
+        converted = true;
+        if (!suppress) ++assigned;
+    }
+    return finish(assigned);
+}
+#endif
 
 }
 
@@ -297,10 +718,11 @@ int APS5_VABI fscanf_nid_postfix(FileStream* stream, const char* format, ...) {
     const int result = LibcDetail::ScanFileWindows_nid_no_patch(native, format, args);
     __builtin_sysv_va_end(args);
 #else
-    RejectGuestWideScan(format);
     std::va_list args;
     va_start(args, format);
-    const int result = HostVfscanf(native, format, args);
+    const int result = HasWideScanFormat(format) ?
+        ScanFileGuest(native, format, [&] { return va_arg(args, void*); }) :
+        HostVfscanf(native, format, args);
     va_end(args);
 #endif
     stream->SyncStatus();
@@ -385,7 +807,12 @@ int APS5_VABI vsscanf_nid_postfix(const char* input, const char* format, VaList*
 #ifdef _WIN32
     return LibcDetail::ScanWindows(input, format, args);
 #else
-    RejectGuestWideScan(format);
+    if (HasWideScanFormat(format)) {
+        LibcDetail::FormatArguments arguments(args);
+        return ScanGuest(input, format, false,
+            [&] { return arguments.Next<void*>(); },
+            [&] { return arguments.Next<unsigned int>(); });
+    }
     std::va_list copy;
     va_copy(copy, *reinterpret_cast<std::va_list*>(args));
     const int result = HostVsscanf(input, format, copy);
@@ -404,10 +831,13 @@ int APS5_VABI sscanf_nid_postfix(const char* input, const char* format, ...) {
 }
 #else
 int APS5_VABI sscanf_nid_postfix(const char* input, const char* format, ...) {
-    RejectGuestWideScan(format);
     std::va_list args;
     va_start(args, format);
-    const int result = HostVsscanf(input, format, args);
+    const int result = HasWideScanFormat(format) ?
+        ScanGuest(input, format, false,
+            [&] { return va_arg(args, void*); },
+            [&] { return va_arg(args, unsigned int); }) :
+        HostVsscanf(input, format, args);
     va_end(args);
     return result;
 }
@@ -426,7 +856,6 @@ int APS5_VABI sscanf_s_nid_postfix(const char* buffer, const char* format, ...) 
 #else
 
 int APS5_VABI sscanf_s_nid_postfix(const char* buffer, const char* format, ...) {
-    RejectGuestWideScan(format);
     std::va_list args;
     va_start(args, format);
     const int result = ScanGuest(buffer, format, true, [&] { return va_arg(args, void*); }, [&] { return va_arg(args, unsigned int); });
@@ -506,7 +935,6 @@ int APS5_VABI printf_s_nid_postfix(const char* format, ...) {
 #else
 
 int APS5_VABI vsscanf_s_nid_postfix(const char* buffer, const char* format, VaList* args) {
-    RejectGuestWideScan(format);
     LibcDetail::FormatArguments arguments(args);
     return ScanGuest(buffer, format, true, [&] { return arguments.Next<void*>(); }, [&] { return arguments.Next<unsigned int>(); });
 }
