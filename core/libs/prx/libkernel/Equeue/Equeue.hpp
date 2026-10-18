@@ -117,7 +117,7 @@ void KqueueDescriptorClosed(int descriptor);
 bool IsKqueueDescriptor(int descriptor);
 std::optional<bool> KqueueReadable(int descriptor);
 KernelEqueueEvent EqueueDescriptorEvent(int descriptor, int16_t filter, uint16_t flags, void* udata);
-void RequireVnodeNotes(uint32_t fflags);
+int RequireVnodeNotes(uint32_t fflags);
 void SetVnodeNotes(KernelEqueueEvent& event, uint32_t fflags);
 int AddVnodeEvent(const KernelEqueueRef& queue, int descriptor, uint32_t fflags, uint16_t flags, void* udata);
 extern "C" {
