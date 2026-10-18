@@ -42,10 +42,9 @@ int main() {
     Require(Throws<std::logic_error>([] { sceProprietaryVoiceChatHelperInitialize(); }),
             "initializing twice did not throw");
     Require(sceProprietaryVoiceChatHelperSetVoiceChatState() == 0, "setting the state failed");
-    Require(Throws<std::runtime_error>([] { sceProprietaryVoiceChatHelperGetVoiceChatUsageState(); }),
-            "reading the unknown usage state did not throw");
     Require(Throws<std::runtime_error>([] { sceProprietaryVoiceChatHelperGetVoiceChat(); }),
             "calling unknown voice chat export did not throw");
+    Require(sceProprietaryVoiceChatHelperGetVoiceChatUsageState() == 0, "reading the usage state failed");
     Require(sceProprietaryVoiceChatHelperTerminate() == 0, "termination failed");
 
     Require(Throws<std::logic_error>([] { sceProprietaryVoiceChatHelperSetVoiceChatState(); }),

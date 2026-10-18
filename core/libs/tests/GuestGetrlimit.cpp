@@ -7,6 +7,8 @@
 #include <vector>
 #ifndef _WIN32
 #include <sys/resource.h>
+#else
+#include <cstdio>
 #endif
 
 struct ResourceLimit {
@@ -174,12 +176,26 @@ int main() {
          }) {
         RequireUnsupported(resource);
     }
-    bool unsupported = false;
-    try {
-        getdtablesize_nid_postfix();
-    } catch (const std::runtime_error&) {
-        unsupported = true;
+    {
+        const int tableSize = getdtablesize_nid_postfix();
+        Require(tableSize > 0);
+#ifdef _WIN32
+        Require(tableSize == _getmaxstdio());
+#else
+        rlimit host{};
+        Require(getrlimit(RLIMIT_NOFILE, &host) == 0);
+        if (host.rlim_cur > static_cast<rlim_t>(std::numeric_limits<int>::max())) {
+            bool rejected = false;
+            try {
+                getdtablesize_nid_postfix();
+            } catch (const std::runtime_error&) {
+                rejected = true;
+            }
+            Require(rejected);
+        } else {
+            Require(tableSize == static_cast<int>(host.rlim_cur));
+        }
+#endif
     }
-    Require(unsupported);
     CheckOpenFileLimit();
 }
