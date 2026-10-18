@@ -626,13 +626,14 @@ static int AddDescriptorEvent(KernelEqueue eq, int fd, std::size_t size, void* u
     if (!isSocket && DescriptorIsOpen_nid_no_patch(fd)) {
         NotImplemented_nid_no_patch(filter == EVFILT_READ ? "sceKernelAddReadEvent: non-socket descriptor" : "sceKernelAddWriteEvent: non-socket descriptor");
     }
-    if (size > 1) {
-        NotImplemented_nid_no_patch(filter == EVFILT_READ ? "sceKernelAddReadEvent: low watermark" : "sceKernelAddWriteEvent: low watermark");
-    }
     if (!isSocket) {
         return SCE_KERNEL_ERROR_EBADF;
     }
-    return EqueueAddEvent_nid_postfix(eq, EqueueDescriptorEvent(fd, filter, EV_ADD, udata));
+    auto event = EqueueDescriptorEvent(fd, filter, EV_ADD, udata);
+    if (size > 1) {
+        event.lowWater = static_cast<std::int64_t>(size);
+    }
+    return EqueueAddEvent_nid_postfix(eq, event);
 }
 
 int APS5_VABI sceKernelAddReadEvent(KernelEqueue eq, int fd, std::size_t size, void* udata) {
