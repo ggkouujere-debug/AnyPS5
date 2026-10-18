@@ -10,6 +10,10 @@
 #include <mutex>
 #include <stdexcept>
 #include <unordered_map>
+#ifndef _WIN32
+#include <poll.h>
+#include <sys/stat.h>
+#endif
 
 static std::unordered_map<KernelEqueue, KernelEqueueRef> g_equeues;
 static std::mutex g_equeueMutex;
@@ -621,12 +625,41 @@ int APS5_VABI sceKernelDeleteAmprSystemEvent(KernelEqueue eq, int id) {
     return sceKernelDeleteAmprEvent(eq, id);
 }
 
+static bool NonSocketDescriptorReady(int fd, bool write, std::int64_t* data, bool* eof) {
+#ifdef _WIN32
+    if (!write) {
+        return GuestSockets::PipeReadState(fd, data, eof) && (*data > 0 || *eof);
+    }
+    return false;
+#else
+    struct stat status{};
+    if (::fstat(fd, &status) != 0) {
+        return false;
+    }
+    if (S_ISFIFO(status.st_mode)) {
+        if (!write) {
+            return GuestSockets::PipeReadState(fd, data, eof) && (*data > 0 || *eof);
+        }
+        pollfd entry{fd, POLLOUT, 0};
+        if (::poll(&entry, 1, 0) <= 0) {
+            return false;
+        }
+        *data = 1;
+        *eof = (entry.revents & POLLHUP) != 0;
+        return true;
+    }
+    if (S_ISREG(status.st_mode)) {
+        *data = write ? 1 : static_cast<std::int64_t>(status.st_size);
+        *eof = false;
+        return true;
+    }
+    return false;
+#endif
+}
+
 static int AddDescriptorEvent(KernelEqueue eq, int fd, std::size_t size, void* udata, int16_t filter) {
     const bool isSocket = GuestSockets::IsOpen(fd);
-    if (!isSocket && DescriptorIsOpen_nid_no_patch(fd)) {
-        NotImplemented_nid_no_patch(filter == EVFILT_READ ? "sceKernelAddReadEvent: non-socket descriptor" : "sceKernelAddWriteEvent: non-socket descriptor");
-    }
-    if (!isSocket) {
+    if (!isSocket && !DescriptorIsOpen_nid_no_patch(fd)) {
         return SCE_KERNEL_ERROR_EBADF;
     }
     auto event = EqueueDescriptorEvent(fd, filter, EV_ADD, udata);
@@ -663,10 +696,16 @@ KernelEqueueEvent EqueueDescriptorEvent(int descriptor, int16_t filter, uint16_t
     event.filter.pollFunc = [](KernelEqueueEvent* e) {
         std::int64_t data = 0;
         bool eof = false;
-        if (!GuestSockets::Ready(static_cast<int>(e->event.ident), e->event.filter == EVFILT_WRITE, &data, &eof)) {
+        const int fd = static_cast<int>(e->event.ident);
+        const bool write = e->event.filter == EVFILT_WRITE;
+        if (GuestSockets::IsOpen(fd)) {
+            if (!GuestSockets::Ready(fd, write, &data, &eof)) {
+                return false;
+            }
+        } else if (!NonSocketDescriptorReady(fd, write, &data, &eof)) {
             return false;
         }
-        if (!eof && data < e->lowWater && !GuestSockets::Listening(static_cast<int>(e->event.ident))) {
+        if (!eof && data < e->lowWater && !GuestSockets::Listening(fd)) {
             return false;
         }
         e->event.data = static_cast<intptr_t>(data);
