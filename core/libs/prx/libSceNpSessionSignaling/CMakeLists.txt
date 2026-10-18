@@ -11,4 +11,8 @@ if(BUILD_TESTING)
         set_tests_properties(guest_np_session_signaling PROPERTIES ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:libSceNpSessionSignaling>")
     endif()
+    add_test_executable(session_signaling_engine_tests ${CMAKE_CURRENT_SOURCE_DIR}/tests/SessionSignalingEngine.cpp ${CMAKE_CURRENT_SOURCE_DIR}/Export.cpp)
+    target_include_directories(session_signaling_engine_tests PRIVATE ${LIBS_INCLUDE_DIR})
+    configure_windows_unwind(session_signaling_engine_tests)
+    add_test(NAME session_signaling_engine COMMAND session_signaling_engine_tests)
 endif()

@@ -27,4 +27,8 @@ if(BUILD_TESTING)
         set_tests_properties(guest_np_manager PROPERTIES ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:libSceNpManager>")
     endif()
+    add_test_executable(np_manager_engine_tests ${CMAKE_CURRENT_SOURCE_DIR}/tests/NpManagerEngine.cpp ${CMAKE_CURRENT_SOURCE_DIR}/Export.cpp)
+    target_include_directories(np_manager_engine_tests PRIVATE ${LIBS_INCLUDE_DIR})
+    configure_windows_unwind(np_manager_engine_tests)
+    add_test(NAME np_manager_engine COMMAND np_manager_engine_tests)
 endif()

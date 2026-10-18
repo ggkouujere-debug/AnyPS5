@@ -40,8 +40,7 @@ int APS5_VABI sceFontFtSupportCid() {
 }
 
 int APS5_VABI sceFontFtSupportFontFormats() {
-    NotImplemented_nid_no_patch(__func__);
-    return 0;
+    return 1;
 }
 
 int APS5_VABI sceFontFtSupportOpenType() {
