@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "prx/libc/include/General.hpp"
+#include "prx/libSceFont/include/FontDriver.hpp"
+#include "prx/libSceFont/include/FontTypes.hpp"
 
 #pragma GCC visibility push(default)
 
@@ -32,9 +34,12 @@ int APS5_VABI sceFontCreateWords() {
     return 0;
 }
 
-int APS5_VABI sceFontDefineAttribute() {
-    NotImplemented_nid_no_patch(__func__);
-    return 0;
+int APS5_VABI sceFontDefineAttribute(FontHandle fontHandle, int attribute, int* oldAttribute) {
+    (void)attribute;
+    auto* native = reinterpret_cast<Font::FontHandleNative*>(fontHandle);
+    if (!native || native->magic != Font::HANDLE_MAGIC) return SCE_FONT_ERROR_INVALID_FONT_HANDLE;
+    if (oldAttribute) *oldAttribute = 0;
+    return SCE_FONT_OK;
 }
 
 int APS5_VABI sceFontDestroyGraphicsDevice() {
@@ -53,9 +58,12 @@ int APS5_VABI sceFontDestroyWords() {
 }
 
 
-int APS5_VABI sceFontGetAttribute() {
-    NotImplemented_nid_no_patch(__func__);
-    return 0;
+int APS5_VABI sceFontGetAttribute(FontHandle fontHandle, int attribute, int* nowAttribute) {
+    (void)attribute;
+    auto* native = reinterpret_cast<Font::FontHandleNative*>(fontHandle);
+    if (!native || native->magic != Font::HANDLE_MAGIC) return SCE_FONT_ERROR_INVALID_FONT_HANDLE;
+    if (nowAttribute) *nowAttribute = 0;
+    return SCE_FONT_OK;
 }
 
 int APS5_VABI sceFontGetFontGlyphsOutlineProfile() {
@@ -78,9 +86,11 @@ int APS5_VABI sceFontGetGlyphExpandBufferState() {
     return 0;
 }
 
-int APS5_VABI sceFontGlyphGetAttribute() {
-    NotImplemented_nid_no_patch(__func__);
-    return 0;
+int APS5_VABI sceFontGlyphGetAttribute(FontGlyph fontGlyph, int attribute, int* nowAttribute) {
+    (void)attribute;
+    if (!fontGlyph || fontGlyph->magic != Font::GLYPH_MAGIC) return SCE_FONT_ERROR_INVALID_GLYPH;
+    if (nowAttribute) *nowAttribute = 0;
+    return SCE_FONT_OK;
 }
 
 int APS5_VABI sceFontGlyphRenderImage() {
