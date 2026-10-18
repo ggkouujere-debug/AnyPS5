@@ -732,8 +732,16 @@ int APS5_VABI sceSslWrite(int sslConnectionId, void* buf, size_t len, int flags)
 }
 
 int APS5_VABI sceSslClose(int sslConnectionId) {
-    (void)sslConnectionId;
-    NotImplemented_nid_no_patch(__func__);
+    std::shared_ptr<Session> session;
+    {
+        std::lock_guard lock(State().mutex);
+        auto& connection = RequireConnection(__func__, sslConnectionId);
+        session = std::move(connection.session);
+    }
+    if (session) {
+        PoolScope scope(session->context->pool);
+        mbedtls_ssl_close_notify(&session->ssl);
+    }
     return 0;
 }
 
