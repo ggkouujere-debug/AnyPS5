@@ -8,13 +8,6 @@
 
 extern "C" {
 
-uint32_t* APS5_VABI sceAgcDcbContextStateOp(CommandBuffer* buf, uint32_t operation) {
- (void)buf;
- (void)operation;
- NotImplemented_nid_no_patch(__func__);
- return nullptr;
-}
-
 uint64_t APS5_VABI sceAgcDcbContextStateOpGetSize(uint32_t operation) {
     Agc::Command::Require(operation <= 3, __func__, "invalid context state operation");
     if (operation == 0) {
@@ -58,6 +51,10 @@ uint32_t* APS5_VABI sceAgcDcbContextStateOp_0100(CommandBuffer* buf, uint32_t op
         append(5);
     }
     return first;
+}
+
+uint32_t* APS5_VABI sceAgcDcbContextStateOp(CommandBuffer* buf, uint32_t operation) {
+    return sceAgcDcbContextStateOp_0100(buf, operation);
 }
 
 std::uint32_t APS5_VABI sceAgcDcbSetBaseDispatchIndirectArgsGetSize() {
