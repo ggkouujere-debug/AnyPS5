@@ -16,6 +16,8 @@
 #include "prx/libSceAgc/Shader/include/ShaderUtils.hpp"
 #include "prx/libSceAgcDriver/Execution/include/Driver.hpp"
 
+extern "C" int APS5_VABI sceAgcUpdateInterpolantMapping_10000(ShaderRegister* regs, const Shader* gs, const Shader* ps);
+
 namespace {
 
 using namespace ShaderRegs;
@@ -362,11 +364,7 @@ int APS5_VABI sceAgcGetFusedShaderSize_0080(SizeAlign* dst, const Shader* front,
 }
 
 int APS5_VABI sceAgcUpdateInterpolantMapping_0100(ShaderRegister* regs, const Shader* vs, const Shader* ps) {
-    (void)regs;
-    (void)vs;
-    (void)ps;
-    NotImplemented_nid_no_patch(__func__);
-    return 0;
+    return sceAgcUpdateInterpolantMapping_10000(regs, vs, ps);
 }
 
 }
