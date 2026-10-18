@@ -7,6 +7,7 @@
 #include "SceTypes.hpp"
 #include "prx/libc/include/General.hpp"
 #include "JisX0208.hpp"
+#include "JisX0212.hpp"
 
 namespace {
 
@@ -150,8 +151,28 @@ int decodeMbcs(const void* profile, const uint8_t* mbcs, uint32_t mbcsMax, uint3
         code = JisX0208::TO_UCS2[(lead - 0xA1) * 94 + (mbcs[1] - 0xA1)];
         return code != 0 ? 0 : CES_ERROR_UNASSIGNED_CODE;
     }
-    if (lead == 0x8F) NotImplemented_nid_no_patch("EUC-JP JIS X 0212 characters");
+    if (lead == 0x8F) {
+        if (mbcsMax < 3) return CES_ERROR_SRC_BUFFER_END;
+        if (mbcs[1] < 0xA1 || mbcs[1] > 0xFE || mbcs[2] < 0xA1 || mbcs[2] > 0xFE) return CES_ERROR_INVALID_ENCODE;
+        length = 3;
+        code = JisX0212::TO_UCS2[(mbcs[1] - 0xA1) * 94 + (mbcs[2] - 0xA1)];
+        return code != 0 ? 0 : CES_ERROR_UNASSIGNED_CODE;
+    }
     return CES_ERROR_INVALID_ENCODE;
+}
+
+const std::vector<std::pair<uint16_t, uint16_t>>& jisX0212Reverse() {
+    static const auto reverse = [] {
+        std::vector<std::pair<uint16_t, uint16_t>> entries;
+        entries.reserve(94 * 94);
+        for (uint32_t cell = 0; cell < 94 * 94; ++cell) {
+            if (JisX0212::TO_UCS2[cell] != 0) entries.emplace_back(JisX0212::TO_UCS2[cell], static_cast<uint16_t>(cell));
+        }
+        std::stable_sort(entries.begin(), entries.end(), [](const auto& left, const auto& right) { return left.first < right.first; });
+        entries.erase(std::unique(entries.begin(), entries.end(), [](const auto& left, const auto& right) { return left.first == right.first; }), entries.end());
+        return entries;
+    }();
+    return reverse;
 }
 
 const std::vector<std::pair<uint16_t, uint16_t>>& jisX0208Reverse() {
@@ -187,10 +208,19 @@ int encodeMbcs(const void* profile, uint32_t code, uint8_t* mbcs, uint32_t& leng
     if (code > 0xFFFF) return CES_ERROR_UNASSIGNED_CODE;
     const auto& reverse = jisX0208Reverse();
     const auto found = std::lower_bound(reverse.begin(), reverse.end(), static_cast<uint16_t>(code), [](const std::pair<uint16_t, uint16_t>& entry, uint16_t value) { return entry.first < value; });
-    if (found == reverse.end() || found->first != code) return CES_ERROR_UNASSIGNED_CODE;
-    length = 2;
-    mbcs[0] = static_cast<uint8_t>(0xA1 + found->second / 94);
-    mbcs[1] = static_cast<uint8_t>(0xA1 + found->second % 94);
+    if (found != reverse.end() && found->first == code) {
+        length = 2;
+        mbcs[0] = static_cast<uint8_t>(0xA1 + found->second / 94);
+        mbcs[1] = static_cast<uint8_t>(0xA1 + found->second % 94);
+        return 0;
+    }
+    const auto& reverse212 = jisX0212Reverse();
+    const auto found212 = std::lower_bound(reverse212.begin(), reverse212.end(), static_cast<uint16_t>(code), [](const std::pair<uint16_t, uint16_t>& entry, uint16_t value) { return entry.first < value; });
+    if (found212 == reverse212.end() || found212->first != code) return CES_ERROR_UNASSIGNED_CODE;
+    length = 3;
+    mbcs[0] = 0x8F;
+    mbcs[1] = static_cast<uint8_t>(0xA1 + found212->second / 94);
+    mbcs[2] = static_cast<uint8_t>(0xA1 + found212->second % 94);
     return 0;
 }
 
@@ -217,7 +247,7 @@ int toMbcs(const void* context, const Source* source, uint32_t sourceMax, uint32
         uint32_t length = 0;
         uint32_t code = 0;
         if (const int result = decode(source + read, sourceMax - read, length, code); result != 0) return result;
-        uint8_t encoded[2];
+        uint8_t encoded[3];
         uint32_t size = 0;
         if (const int result = encodeMbcs(profile, code, encoded, size); result != 0) return result;
         if (mbcs) {
