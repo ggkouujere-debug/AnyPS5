@@ -33,6 +33,7 @@ struct Voice {
     std::mutex mutex;
     bool initialized = false;
     bool started = false;
+    bool chatEnabled = false;
     std::uint32_t nextId = 0;
     std::map<std::uint32_t, Port> ports;
     std::set<std::pair<std::uint32_t, std::uint32_t>> connections;
@@ -240,7 +241,9 @@ int APS5_VABI sceVoiceGetResourceInfo(VoiceResourceInfo* info) {
 }
 
 int APS5_VABI sceVoiceEnableChat(void) {
-    NotImplemented_nid_no_patch(__func__);
+    auto& voice = State();
+    std::lock_guard lock(voice.mutex);
+    voice.chatEnabled = true;
     return 0;
 }
 
@@ -252,7 +255,9 @@ int APS5_VABI sceVoiceResetPort(uint32_t port_id) {
 }
 
 int APS5_VABI sceVoiceDisableChat(void) {
-    NotImplemented_nid_no_patch(__func__);
+    auto& voice = State();
+    std::lock_guard lock(voice.mutex);
+    voice.chatEnabled = false;
     return 0;
 }
 
