@@ -56,11 +56,21 @@ struct Node {
 };
 
 using NullAccessCallback = const Value& (APS5_VABI*)(ValueType, const Value*, void*);
+enum class FunctionType : std::int32_t {};
+using ElementAccessFailureHandler = void (APS5_VABI*)(int, const String*, const unsigned long*, const Value*, const Value*, void*);
+using SpecialFloatHandler = const Value (APS5_VABI*)(FunctionType, double, const Value*, void*, bool*);
+using TypeMismatchHandler = const Value& (APS5_VABI*)(ValueType, const Value*, const Value*, void*);
 
 struct Globals {
     std::mutex mutex;
     NullAccessCallback callback = nullptr;
     void* context = nullptr;
+    ElementAccessFailureHandler elementAccessFailureHandler = nullptr;
+    void* elementAccessFailureContext = nullptr;
+    SpecialFloatHandler specialFloatHandler = nullptr;
+    void* specialFloatContext = nullptr;
+    TypeMismatchHandler typeMismatchHandler = nullptr;
+    void* typeMismatchContext = nullptr;
 };
 
 Globals& State() {
@@ -901,24 +911,43 @@ void APS5_VABI _ZN3sce4Json5Value21setNullAccessCallBackEPFRKS1_NS0_9ValueTypeEP
     state.context = context;
 }
 
-int APS5_VABI _ZN3sce4Json5Value30setElementAccessFailureHandlerEPFviPKNS0_6StringEPKmPKS1_S8_PvES9_(void) {
-    NotImplemented_nid_no_patch(__func__);
+int APS5_VABI _ZN3sce4Json5Value30setElementAccessFailureHandlerEPFviPKNS0_6StringEPKmPKS1_S8_PvES9_(ElementAccessFailureHandler handler, void* context) {
+    auto& state = State();
+    std::lock_guard lock(state.mutex);
+    state.elementAccessFailureHandler = handler;
+    state.elementAccessFailureContext = context;
     return 0;
 }
 
-int APS5_VABI _ZN3sce4Json5Value22setSpecialFloatHandlerEPFKS1_NS0_12FunctionTypeEdPS2_PvPbES5_(void) {
-    NotImplemented_nid_no_patch(__func__);
+int APS5_VABI _ZN3sce4Json5Value22setSpecialFloatHandlerEPFKS1_NS0_12FunctionTypeEdPS2_PvPbES5_(SpecialFloatHandler handler, void* context) {
+    auto& state = State();
+    std::lock_guard lock(state.mutex);
+    state.specialFloatHandler = handler;
+    state.specialFloatContext = context;
     return 0;
 }
 
-int APS5_VABI _ZN3sce4Json5Value22setTypeMismatchHandlerEPFRKS1_NS0_9ValueTypeEPS2_S5_PvES6_(void) {
-    NotImplemented_nid_no_patch(__func__);
+int APS5_VABI _ZN3sce4Json5Value22setTypeMismatchHandlerEPFRKS1_NS0_9ValueTypeEPS2_S5_PvES6_(TypeMismatchHandler handler, void* context) {
+    auto& state = State();
+    std::lock_guard lock(state.mutex);
+    state.typeMismatchHandler = handler;
+    state.typeMismatchContext = context;
     return 0;
 }
 
-int APS5_VABI _ZNK3sce4Json5ValuecvbEv(void) {
-    NotImplemented_nid_no_patch(__func__);
-    return 0;
+bool APS5_VABI _ZNK3sce4Json5ValuecvbEv(const Value* self) {
+    const Node& node = NodeOf(*self);
+    switch (node.type) {
+        case TypeNull: return false;
+        case TypeBoolean: return node.boolean;
+        case TypeInteger: return node.integer != 0;
+        case TypeUInteger: return node.uinteger != 0;
+        case TypeReal: return node.real != 0;
+        case TypeString: return !node.string.text->empty();
+        case TypeArray: return !node.array.items->empty();
+        case TypeObject: return !node.object.items->empty();
+    }
+    return false;
 }
 
 void APS5_VABI _ZN3sce4Json6Object4PairC1ERKNS0_6StringERKNS0_5ValueE(Pair* self, const String* key, const Value* value) {
@@ -938,8 +967,16 @@ void APS5_VABI _ZN3sce4Json6Object4PairD1Ev(Pair* self) {
     Destroy(self->value);
 }
 
-int APS5_VABI _ZN3sce4Json6Object6insertERKNS1_4PairE() {
-    NotImplemented_nid_no_patch(__func__);
+int APS5_VABI _ZN3sce4Json6Object6insertERKNS1_4PairE(Object* self, const Pair* pair) {
+    Pair copy{};
+    Construct(copy.key, *pair->key.text);
+    try {
+        CopyInto(copy.value, pair->value);
+    } catch (...) {
+        Destroy(copy.key);
+        throw;
+    }
+    self->items->push_back(copy);
     return 0;
 }
 
