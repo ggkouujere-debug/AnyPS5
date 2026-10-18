@@ -34,6 +34,7 @@ static constexpr int GUEST_SCHED_RR = 3;
 
 namespace {
 std::atomic<int> guestConcurrency{0};
+std::atomic<KernelCpumask> implicitRootCpuset{0};
 }
 
 static bool AcceptsSchedParam(int policy, int priority) {
@@ -50,8 +51,18 @@ int APS5_VABI scePthreadSetaffinity(Pthread thread, KernelCpumask mask);
 KernelCpumask APS5_VABI sceKernelGetAvailableCpumask(void);
 int APS5_VABI getpid_nid_postfix(void);
 
+static KernelCpumask ImplicitRootCpusetMask() {
+    auto mask = implicitRootCpuset.load(std::memory_order_relaxed);
+    if (mask == 0) {
+        const auto available = sceKernelGetAvailableCpumask();
+        if (implicitRootCpuset.compare_exchange_strong(mask, available, std::memory_order_relaxed)) return available;
+    }
+    return mask;
+}
+
 int APS5_VABI cpuset_getaffinity_nid_postfix(int level, int which, std::int64_t id, std::size_t size, void* mask) {
-    constexpr int LevelWhich = 3, WhichThread = 1, WhichProcess = 2;
+    constexpr int LevelRoot = 1, LevelCpuset = 2, LevelWhich = 3;
+    constexpr int WhichThread = 1, WhichProcess = 2, WhichCpuset = 3, WhichIrq = 4, WhichJail = 5, WhichDomain = 6;
     constexpr int GuestEsrch = 3, GuestEfault = 14, GuestEinval = 22, GuestErange = 34;
     constexpr std::size_t MaximumSize = 256 / 8;
     const auto fail = [](int error) {
@@ -67,21 +78,29 @@ int APS5_VABI cpuset_getaffinity_nid_postfix(int level, int which, std::int64_t 
         if (!GetLiveGuestThreadAffinity_nid_no_patch(tid, affinity)) return fail(GuestEsrch);
     } else if (which == WhichProcess) {
         if (id != -1 && id != getpid_nid_postfix()) return fail(GuestEsrch);
-    } else if (which >= 3 && which <= 6) {
-        NotImplemented_nid_no_patch("cpuset_getaffinity other than the calling thread or process");
+        affinity = LiveGuestThreadsAffinity();
+    } else if (which == WhichCpuset) {
+        if (id != -1) return fail(GuestEsrch);
+        affinity = ImplicitRootCpusetMask();
+    } else if (which == WhichIrq) {
+        if (level < LevelRoot || level > LevelWhich) return fail(GuestEinval);
+        if (level != LevelWhich) return fail(GuestEinval);
+        return fail(GuestEsrch);
+    } else if (which == WhichJail || which == WhichDomain) {
+        return fail(GuestEsrch);
     } else {
         return fail(GuestEinval);
     }
-    if (level < 1 || level > 3) return fail(GuestEinval);
-    if (level != LevelWhich) NotImplemented_nid_no_patch("cpuset_getaffinity other than the calling thread or process");
-    if (which == WhichProcess) affinity = LiveGuestThreadsAffinity();
+    if (level < LevelRoot || level > LevelWhich) return fail(GuestEinval);
+    if (level != LevelWhich) affinity = ImplicitRootCpusetMask();
     std::memset(mask, 0, size);
     std::memcpy(mask, &affinity, sizeof(affinity));
     return 0;
 }
 
 int APS5_VABI cpuset_setaffinity_nid_postfix(int level, int which, std::int64_t id, std::size_t size, const void* mask) {
-    constexpr int LevelWhich = 3, WhichThread = 1, WhichProcess = 2;
+    constexpr int LevelRoot = 1, LevelCpuset = 2, LevelWhich = 3;
+    constexpr int WhichThread = 1, WhichProcess = 2, WhichCpuset = 3, WhichIrq = 4, WhichJail = 5, WhichDomain = 6;
     constexpr int GuestEsrch = 3, GuestEdeadlk = 11, GuestEfault = 14, GuestEinval = 22, GuestErange = 34;
     constexpr std::size_t MaximumSize = 256 / 8;
     const auto fail = [](int error) {
@@ -99,21 +118,34 @@ int APS5_VABI cpuset_setaffinity_nid_postfix(int level, int which, std::int64_t 
         if (id != -1 && id != self->tid && !LiveGuestThreadExists(id)) return fail(GuestEsrch);
     } else if (which == WhichProcess) {
         if (id != -1 && id != getpid_nid_postfix()) return fail(GuestEsrch);
-    } else if (which >= 3 && which <= 6) {
-        NotImplemented_nid_no_patch("cpuset_setaffinity other than the calling thread or process");
+    } else if (which == WhichCpuset) {
+        if (id != -1) return fail(GuestEsrch);
+    } else if (which == WhichIrq) {
+        if (level < LevelRoot || level > LevelWhich) return fail(GuestEinval);
+        if (level != LevelWhich) return fail(GuestEinval);
+        return fail(GuestEsrch);
+    } else if (which == WhichJail || which == WhichDomain) {
+        return fail(GuestEsrch);
     } else {
         return fail(GuestEinval);
     }
-    if (level < 1 || level > 3) return fail(GuestEinval);
-    if (level != LevelWhich) NotImplemented_nid_no_patch("cpuset_setaffinity other than the calling thread or process");
+    if (level < LevelRoot || level > LevelWhich) return fail(GuestEinval);
     KernelCpumask requested = 0;
     std::memcpy(&requested, bytes, sizeof(requested));
     const KernelCpumask affinity = requested & sceKernelGetAvailableCpumask();
     if (affinity == 0) return fail(GuestEdeadlk);
-    if (which == WhichThread) {
-        const auto tid = id == -1 ? self->tid : id;
-        if (!SetLiveGuestThreadAffinity_nid_no_patch(tid, affinity)) return fail(GuestEsrch);
-    } else SetLiveGuestThreadsAffinity(affinity);
+    if (level == LevelWhich) {
+        if (which == WhichThread) {
+            const auto tid = id == -1 ? self->tid : id;
+            if (!SetLiveGuestThreadAffinity_nid_no_patch(tid, affinity)) return fail(GuestEsrch);
+        } else if (which == WhichProcess) {
+            SetLiveGuestThreadsAffinity(affinity);
+        } else {
+            implicitRootCpuset.store(affinity, std::memory_order_relaxed);
+        }
+    } else {
+        implicitRootCpuset.store(affinity, std::memory_order_relaxed);
+    }
     return 0;
 }
 
