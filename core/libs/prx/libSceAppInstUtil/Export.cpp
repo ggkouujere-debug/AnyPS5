@@ -6,11 +6,9 @@
 extern "C" {
 
 int APS5_VABI sceAppInstUtilInitialize(void) {
-    NotImplemented_nid_no_patch(__func__);
     return 0;
 }
 int APS5_VABI sceAppInstUtilTerminate(void) {
-    NotImplemented_nid_no_patch(__func__);
     return 0;
 }
 int APS5_VABI sceAppInstUtilAppInstallAll(void* reserved) {
@@ -22,7 +20,10 @@ int APS5_VABI sceAppInstUtilAppInstallTitleDir(const char* titleId, const char* 
     return 0;
 }
 int APS5_VABI sceAppInstUtilAppIsInInstalling(int32_t* installing) {
-    NotImplemented_nid_no_patch(__func__);
+    if (installing == nullptr) {
+        return -1;
+    }
+    *installing = 0;
     return 0;
 }
 int APS5_VABI sceAppInstUtilAppIsInUpdating() {
@@ -30,7 +31,10 @@ int APS5_VABI sceAppInstUtilAppIsInUpdating() {
     return 0;
 }
 int APS5_VABI sceAppInstUtilAppExists(const char* titleId, int32_t* exists) {
-    NotImplemented_nid_no_patch(__func__);
+    if (titleId == nullptr || exists == nullptr) {
+        return -1;
+    }
+    *exists = 0;
     return 0;
 }
 int APS5_VABI sceAppInstUtilAppGetSize() {
